@@ -14,7 +14,7 @@ router.get('/summary/:tenantId', async (req,res)=>{
 });
 
 // routes/insights.js (or wherever)
-router.get('/orders-by-date/:id?', async (req, res) => {
+router.get('/orders-by-date/:id', async (req, res) => {
   // :id may be either a storeId or a tenantId (backwards-compatible)
   // prefer explicit query ?storeId= if provided
   const paramId = req.params.id;
