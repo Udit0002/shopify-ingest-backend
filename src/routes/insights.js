@@ -14,13 +14,13 @@ router.get('/summary/:tenantId', async (req,res)=>{
 });
 
 // Orders by date (range)
-router.get('/orders-by-date/:tenantId', async (req, res) => {
-  const { tenantId } = req.params;
+router.get('/orders-by-date/:storeId', async (req, res) => {
+  const { storeId } = req.params;
   let { from, to } = req.query;
 
   try {
     // find store
-    const store = await prisma.store.findUnique({ where: { id: tenantId } });
+    const store = await prisma.store.findUnique({ where: { id: storeId } });
     if (!store) return res.status(404).json({ error: 'store not found' });
 
     // default range: last 30 days
