@@ -7,6 +7,15 @@ import tenantsRouter from './routes/tenants.js';
 import shopifyRouter from './routes/shopify.js';
 import insightsRouter from './routes/insights.js';
 
+console.log("🚀 Starting server with env:", {
+  PORT: process.env.PORT,
+  DATABASE_URL: !!process.env.DATABASE_URL,
+  SUPABASE_URL: !!process.env.SUPABASE_URL,
+  SUPABASE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+  WEBHOOK_SECRET: !!process.env.SHOPIFY_WEBHOOK_SECRET
+});
+
+
 dotenv.config();
 const app = express();
 
