@@ -24,15 +24,19 @@ app.use(morgan('dev'));
 app.use(cors());
 app.use(express.json()); // normal API JSON body parser for non-webhook routes
 
-app.get("/", (req, res) => {
-  res.json({ status: "root-ok" });
-});
 
 app.use('/health', healthRouter);
 app.use('/tenants', tenantsRouter);
 app.use('/shopify', shopifyRouter);   // contains webhook route that accepts raw body
 app.use('/insights', insightsRouter);
-
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server up on ${PORT}`));
 
+app.get("/", (req, res) => res.send("OK"));  // Railway health check
+
+const server = app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Server running on ${PORT}`);
+});
+
+server.on("error", (err) => {
+  console.error("❌ Server error:", err);
+});
