@@ -13,6 +13,68 @@ router.get('/summary/:tenantId', async (req,res)=>{
   });
 });
 
+router.get('/recent-orders/:tenantId', async (req, res) => {
+  const { tenantId } = req.params;
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 10));
+
+  try {
+    const store = await prisma.store.findUnique({ where: { id: tenantId } });
+    if (!store) return res.status(404).json({ error: 'store not found' });
+
+    // 1) fetch latest orders (only fields we need)
+    const orders = await prisma.order.findMany({
+      where: { storeId: store.id },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      select: {
+        id: true,
+        orderNumber: true,
+        totalPrice: true,
+        currency: true,
+        status: true,
+        createdAt: true,
+        customerId: true, // important: fetch the customerId
+      },
+    });
+
+    // 2) collect customerIds and batch fetch customers
+    const customerIds = [...new Set(orders.map(o => o.customerId).filter(Boolean))];
+    let customersById = {};
+    if (customerIds.length) {
+      const customers = await prisma.customer.findMany({
+        where: { id: { in: customerIds } },
+        select: { id: true, firstName: true, lastName: true, email: true },
+      });
+      customersById = customers.reduce((acc, c) => {
+        acc[c.id] = c;
+        return acc;
+      }, {});
+    }
+
+    // 3) map orders => attach customerName/email if available
+    const data = orders.map(o => {
+      const cust = customersById[o.customerId] || null;
+      const customerName = cust ? `${cust.firstName || ''} ${cust.lastName || ''}`.trim() || '—' : null;
+      return {
+        id: o.id,
+        orderNumber: o.orderNumber ?? o.id,
+        total: Number(o.totalPrice ?? 0),
+        currency: o.currency ?? 'USD',
+        status: o.status ?? 'unknown',
+        createdAt: o.createdAt,
+        customerId: o.customerId ?? null,
+        customerName,
+        email: cust?.email ?? null,
+      };
+    });
+
+    res.json({ data });
+  } catch (err) {
+    console.error('recent-orders error', err);
+    res.status(500).json({ error: 'internal_server_error' });
+  }
+});
+
 // routes/insights.js (or wherever)
 router.get('/orders-by-date/:id', async (req, res) => {
   // :id may be either a storeId or a tenantId (backwards-compatible)
