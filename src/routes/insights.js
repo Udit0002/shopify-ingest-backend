@@ -14,7 +14,7 @@ router.get('/summary/:tenantId', async (req,res)=>{
 });
 
 // Orders by date (range)
-router.get('/insights/orders-by-date/:tenantId', async (req, res) => {
+router.get('/orders-by-date/:tenantId', async (req, res) => {
   const { tenantId } = req.params;
   let { from, to } = req.query;
 
@@ -62,7 +62,7 @@ router.get('/insights/orders-by-date/:tenantId', async (req, res) => {
 
 // INSIGHTS: top customers by spend
 // GET /insights/top-customers/:tenantId?limit=5
-router.get('/insights/top-customers/:tenantId', async (req, res) => {
+router.get('/top-customers/:tenantId', async (req, res) => {
   const { tenantId } = req.params;
   const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 5));
 
