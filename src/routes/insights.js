@@ -13,17 +13,56 @@ router.get('/summary/:tenantId', async (req,res)=>{
   });
 });
 
-// Orders by date (range)
-router.get('/orders-by-date/:storeId', async (req, res) => {
-  const { storeId } = req.params;
+// routes/insights.js (or wherever)
+router.get('/orders-by-date/:id?', async (req, res) => {
+  // :id may be either a storeId or a tenantId (backwards-compatible)
+  // prefer explicit query ?storeId= if provided
+  const paramId = req.params.id;
+  const explicitStoreId = req.query.storeId ? String(req.query.storeId) : null;
+  const tenantId = req.query.tenantId ? String(req.query.tenantId) : null;
   let { from, to } = req.query;
 
   try {
-    // find store
-    const store = await prisma.store.findUnique({ where: { id: storeId } });
-    if (!store) return res.status(404).json({ error: 'store not found' });
+    // helper to resolve store by various inputs
+    async function resolveStore() {
+      // 1) explicit query param storeId
+      if (explicitStoreId) {
+        const s = await prisma.store.findUnique({ where: { id: explicitStoreId } });
+        if (s) return s;
+        // if not found, keep trying other options for helpful error messages
+      }
 
-    // default range: last 30 days
+      // 2) path param provided and looks like a store id
+      if (paramId) {
+        // try as store id first
+        let s = await prisma.store.findUnique({ where: { id: paramId } });
+        if (s) return s;
+
+        // if not found as store id, assume paramId is tenantId and try to find a store for tenant
+        s = await prisma.store.findFirst({ where: { tenantId: paramId } });
+        if (s) return s;
+      }
+
+      // 3) explicit query tenantId (e.g. ?tenantId=...)
+      if (tenantId) {
+        const s = await prisma.store.findFirst({ where: { tenantId } });
+        if (s) return s;
+      }
+
+      // none matched
+      return null;
+    }
+
+    const store = await resolveStore();
+    if (!store) {
+      console.log('[insights] store resolve failed', { paramId, explicitStoreId, tenantId });
+      return res.status(404).json({
+        error: 'store_not_found',
+        tried: { paramId, explicitStoreId, tenantId }
+      });
+    }
+
+    // parse dates (same as your original logic)
     const now = new Date();
     const defaultFrom = new Date(now);
     defaultFrom.setDate(now.getDate() - 30);
@@ -45,20 +84,19 @@ router.get('/orders-by-date/:storeId', async (req, res) => {
       ORDER BY date;
     `;
 
-    // rows is an array of objects { date, orders, revenue }
-    // convert revenue to number (depending on driver it may be string)
     const data = rows.map(r => ({
       date: String(r.date),
       orders: Number(r.orders),
       revenue: Number(r.revenue)
     }));
 
-    res.json({ data });
+    return res.json({ storeId: store.id, data });
   } catch (err) {
     console.error('insights orders-by-date error', err);
-    res.status(500).json({ error: 'internal_server_error' });
+    return res.status(500).json({ error: 'internal_server_error' });
   }
 });
+
 
 // INSIGHTS: top customers by spend
 // GET /insights/top-customers/:tenantId?limit=5
