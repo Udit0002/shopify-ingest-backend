@@ -15,6 +15,10 @@ app.use(morgan('dev'));
 app.use(cors());
 app.use(express.json()); // normal API JSON body parser for non-webhook routes
 
+app.get("/", (req, res) => {
+  res.json({ status: "root-ok" });
+});
+
 app.use('/health', healthRouter);
 app.use('/tenants', tenantsRouter);
 app.use('/shopify', shopifyRouter);   // contains webhook route that accepts raw body
