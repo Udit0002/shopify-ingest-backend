@@ -36,6 +36,7 @@ model Customer {
   lastName     String?
   createdAt    DateTime @default(now())
   store        Store    @relation(fields: [storeId], references: [id])
+  orders       Order[]  @relation("CustomerOrders")
   @@unique([shopifyId, storeId])
 }
 
@@ -50,12 +51,18 @@ model Product {
 }
 
 model Order {
-  id           String   @id @default(uuid())
-  storeId      String
-  shopifyId    String
-  totalPrice   Float
-  currency     String
-  createdAt    DateTime @default(now())
-  store        Store    @relation(fields: [storeId], references: [id])
+  id             String   @id @default(uuid())
+  storeId        String
+  shopifyId      String
+  totalPrice     Float
+  currency       String
+  createdAt      DateTime @default(now())
+  store          Store    @relation(fields: [storeId], references: [id])
+
+  // NEW: link to customer (nullable initially to allow backfill)
+  customerId     String? 
+  customer       Customer? @relation("CustomerOrders", fields: [customerId], references: [id])
+
   @@unique([shopifyId, storeId])
+  @@index([customerId])
 }
