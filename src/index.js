@@ -21,4 +21,5 @@ app.use('/shopify', shopifyRouter);   // contains webhook route that accepts raw
 app.use('/insights', insightsRouter);
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, ()=> console.log(`Server up on ${PORT}`));
+app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server up on ${PORT}`));
+
