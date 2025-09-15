@@ -14,19 +14,91 @@ router.get('/summary/:tenantId', async (req,res)=>{
 });
 
 // Orders by date (range)
-router.get('/orders-by-date/:tenantId', async (req,res)=>{
-  const { start, end } = req.query; // e.g. ?start=2025-01-01&end=2025-02-01
-  const tenantId = req.params.tenantId;
-  // Simple raw SQL for grouping by date (safe with prisma.$queryRaw if you prefer)
-  const rows = await prisma.$queryRaw`
-    SELECT date_trunc('day', "createdAt") AS day, COUNT(*) as orders_count, SUM("totalPrice") as revenue
-    FROM "Order" o
-    JOIN "Store" s ON o."storeId" = s.id
-    WHERE s."tenantId" = ${tenantId} AND o."createdAt" BETWEEN ${start}::timestamp AND ${end}::timestamp
-    GROUP BY day
-    ORDER BY day;
-  `;
-  res.json(rows);
+router.get('/insights/orders-by-date/:tenantId', async (req, res) => {
+  const { tenantId } = req.params;
+  let { from, to } = req.query;
+
+  try {
+    // find store
+    const store = await prisma.store.findUnique({ where: { id: tenantId } });
+    if (!store) return res.status(404).json({ error: 'store not found' });
+
+    // default range: last 30 days
+    const now = new Date();
+    const defaultFrom = new Date(now);
+    defaultFrom.setDate(now.getDate() - 30);
+
+    const fromDate = from ? new Date(String(from) + 'T00:00:00Z') : defaultFrom;
+    const toDate = to ? new Date(String(to) + 'T23:59:59Z') : now;
+
+    // Parameterized raw SQL - qualify createdAt with table alias `o`
+    const rows = await prisma.$queryRaw`
+      SELECT
+        to_char(date_trunc('day', o."createdAt"), 'YYYY-MM-DD') AS date,
+        COUNT(*)::int AS orders,
+        COALESCE(SUM(o."totalPrice"), 0)::numeric AS revenue
+      FROM "Order" o
+      WHERE o."storeId" = ${store.id}
+        AND o."createdAt" >= ${fromDate}
+        AND o."createdAt" <= ${toDate}
+      GROUP BY date
+      ORDER BY date;
+    `;
+
+    // rows is an array of objects { date, orders, revenue }
+    // convert revenue to number (depending on driver it may be string)
+    const data = rows.map(r => ({
+      date: String(r.date),
+      orders: Number(r.orders),
+      revenue: Number(r.revenue)
+    }));
+
+    res.json({ data });
+  } catch (err) {
+    console.error('insights orders-by-date error', err);
+    res.status(500).json({ error: 'internal_server_error' });
+  }
+});
+
+// INSIGHTS: top customers by spend
+// GET /insights/top-customers/:tenantId?limit=5
+router.get('/insights/top-customers/:tenantId', async (req, res) => {
+  const { tenantId } = req.params;
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 5));
+
+  try {
+    const store = await prisma.store.findUnique({ where: { id: tenantId }});
+    if (!store) return res.status(404).json({ error: 'store not found' });
+
+    // Use Prisma groupBy (safe) to sum by customerId
+    const groups = await prisma.order.groupBy({
+      by: ['customerId'],
+      where: { storeId: store.id, customerId: { not: null } },
+      _sum: { totalPrice: true },
+      orderBy: { _sum: { totalPrice: 'desc' } },
+      take: limit,
+    });
+
+    const results = [];
+    for (const g of groups) {
+      const cust = await prisma.customer.findUnique({
+        where: { id: g.customerId },
+        select: { id: true, email: true, firstName: true, lastName: true },
+      });
+
+      results.push({
+        id: cust?.id || g.customerId,
+        name: cust ? `${cust.firstName || ''} ${cust.lastName || ''}`.trim() || '—' : '—',
+        email: cust?.email || null,
+        totalSpend: Number(g._sum.totalPrice || 0),
+      });
+    }
+
+    res.json({ data: results });
+  } catch (err) {
+    console.error('insights top-customers error', err);
+    res.status(500).json({ error: 'internal_server_error' });
+  }
 });
 
 export default router;
