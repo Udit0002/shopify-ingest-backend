@@ -82,110 +82,142 @@ router.get('/fetch-products/:shopDomain', async (req,res)=>{
 });
 
 // Fetch customers for a store (manual sync)
+// inside src/routes/shopify.js (replace existing fetch-customers route)
 router.get('/fetch-customers/:shopDomain', async (req, res) => {
   const shopDomain = req.params.shopDomain;
+  const fetchAll = req.query.all === 'true';
 
-  // find store in DB
   const store = await prisma.store.findUnique({ where: { shopDomain } });
   if (!store) return res.status(404).send('store not found');
 
   try {
-    const url = `https://${shopDomain}/admin/api/2025-07/customers.json?limit=50`;
-    const resp = await axios.get(url, {
-      headers: { 'X-Shopify-Access-Token': store.accessToken }
-    });
-
-    const customers = resp.data.customers || [];
-
-    // Upsert customers into Supabase via Prisma
-    for (const c of customers) {
-      await prisma.customer.upsert({
-        where: {
-          shopifyId_storeId: {
-            shopifyId: String(c.id),
-            storeId: store.id
-          }
-        },
-        update: {
-          email: c.email,
-          firstName: c.first_name,
-          lastName: c.last_name
-        },
-        create: {
-          shopifyId: String(c.id),
-          email: c.email,
-          firstName: c.first_name,
-          lastName: c.last_name,
-          storeId: store.id
-        }
-      });
+    if (!fetchAll) {
+      // existing single-page behavior (keep for quick tests)
+      const url = `https://${shopDomain}/admin/api/2025-07/customers.json?limit=250`;
+      const resp = await axios.get(url, { headers: { 'X-Shopify-Access-Token': store.accessToken }});
+      const customers = resp.data.customers || [];
+      for (const c of customers) {
+        await prisma.customer.upsert({
+          where: { shopifyId_storeId: { shopifyId: String(c.id), storeId: store.id } },
+          update: { email: c.email, firstName: c.first_name, lastName: c.last_name },
+          create: { shopifyId: String(c.id), email: c.email, firstName: c.first_name, lastName: c.last_name, storeId: store.id }
+        });
+      }
+      return res.json({ count: customers.length });
     }
 
-    res.json({
-      count: customers.length,
-      customers: customers.map(c => ({
-        id: c.id,
-        email: c.email,
-        firstName: c.first_name,
-        lastName: c.last_name
-      }))
-    });
+    // FULL BACKFILL: paginate using since_id
+    let sinceId = 0;
+    let total = 0;
+    while (true) {
+      const url = `https://${shopDomain}/admin/api/2025-07/customers.json?limit=250&since_id=${sinceId}`;
+      const resp = await axios.get(url, { headers: { 'X-Shopify-Access-Token': store.accessToken }});
+      const customers = resp.data.customers || [];
+      if (!customers.length) break;
+
+      // upsert batch
+      for (const c of customers) {
+        await prisma.customer.upsert({
+          where: { shopifyId_storeId: { shopifyId: String(c.id), storeId: store.id } },
+          update: { email: c.email, firstName: c.first_name, lastName: c.last_name },
+          create: { shopifyId: String(c.id), email: c.email, firstName: c.first_name, lastName: c.last_name, storeId: store.id }
+        });
+      }
+
+      total += customers.length;
+      sinceId = customers[customers.length - 1].id;
+      // small delay to be polite (avoid throttling)
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    res.json({ totalImported: total });
   } catch (err) {
-    console.error(err.response?.data || err.message);
+    console.error('fetch-customers error', err.response?.data || err.message || err);
     res.status(500).send('error fetching customers');
   }
 });
 
+
 // Fetch orders for a store (manual sync)
+// inside src/routes/shopify.js (replace existing fetch-orders route)
+import url from 'url'; // at top if not already imported
+
+// helper to parse Link header and return next page_info (if any)
+function getNextPageInfo(linkHeader) {
+  if (!linkHeader) return null;
+  // Link header format: <https://...&page_info=xxx>; rel="next", <...>; rel="previous"
+  const parts = linkHeader.split(',');
+  for (const p of parts) {
+    if (p.includes('rel="next"')) {
+      const match = p.match(/page_info=([^&>]+)/);
+      if (match) return match[1];
+    }
+  }
+  return null;
+}
+
 router.get('/fetch-orders/:shopDomain', async (req, res) => {
   const shopDomain = req.params.shopDomain;
+  const fetchAll = req.query.all === 'true';
 
-  // find store in DB
   const store = await prisma.store.findUnique({ where: { shopDomain } });
   if (!store) return res.status(404).send('store not found');
 
   try {
-    const url = `https://${shopDomain}/admin/api/2025-07/orders.json?status=any&limit=50`;
-    const resp = await axios.get(url, {
-      headers: { 'X-Shopify-Access-Token': store.accessToken }
-    });
-
-    const orders = resp.data.orders || [];
-
-    // Upsert orders into DB
-    for (const o of orders) {
-      await prisma.order.upsert({
-        where: {
-          shopifyId_storeId: {
-            shopifyId: String(o.id),
-            storeId: store.id
-          }
-        },
-        update: {
-          totalPrice: parseFloat(o.total_price || 0),
-          currency: o.currency
-        },
-        create: {
-          shopifyId: String(o.id),
-          totalPrice: parseFloat(o.total_price || 0),
-          currency: o.currency,
-          storeId: store.id
-        }
-      });
+    if (!fetchAll) {
+      const url0 = `https://${shopDomain}/admin/api/2025-07/orders.json?status=any&limit=50`;
+      const resp = await axios.get(url0, { headers: { 'X-Shopify-Access-Token': store.accessToken }});
+      const orders = resp.data.orders || [];
+      for (const o of orders) {
+        await prisma.order.upsert({
+          where: { shopifyId_storeId: { shopifyId: String(o.id), storeId: store.id } },
+          update: { totalPrice: parseFloat(o.total_price || 0), currency: o.currency },
+          create: { shopifyId: String(o.id), totalPrice: parseFloat(o.total_price || 0), currency: o.currency, storeId: store.id }
+        });
+      }
+      return res.json({ count: orders.length });
     }
 
-    res.json({
-      count: orders.length,
-      orders: orders.map(o => ({
-        id: o.id,
-        email: o.email,
-        totalPrice: o.total_price,
-        currency: o.currency,
-        createdAt: o.created_at
-      }))
-    });
+    // FULL backfill using cursor (page_info)
+    let nextPageInfo = null;
+    let total = 0;
+    // initial request
+    let reqUrl = `https://${shopDomain}/admin/api/2025-07/orders.json?status=any&limit=250`;
+    while (true) {
+      if (nextPageInfo) {
+        reqUrl = `https://${shopDomain}/admin/api/2025-07/orders.json?status=any&limit=250&page_info=${nextPageInfo}`;
+      }
+      const resp = await axios.get(reqUrl, { headers: { 'X-Shopify-Access-Token': store.accessToken }, validateStatus: null });
+      // if 429 or 500, break or retry
+      if (resp.status >= 400) {
+        console.error('Shopify orders fetch error status', resp.status, resp.data);
+        break;
+      }
+      const orders = resp.data.orders || [];
+      if (!orders.length) break;
+
+      for (const o of orders) {
+        await prisma.order.upsert({
+          where: { shopifyId_storeId: { shopifyId: String(o.id), storeId: store.id } },
+          update: { totalPrice: parseFloat(o.total_price || 0), currency: o.currency },
+          create: { shopifyId: String(o.id), totalPrice: parseFloat(o.total_price || 0), currency: o.currency, storeId: store.id }
+        });
+      }
+
+      total += orders.length;
+
+      const link = resp.headers['link'] || resp.headers['Link'];
+      nextPageInfo = getNextPageInfo(link);
+      if (!nextPageInfo) break;
+
+      // be polite
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    res.json({ totalImported: total });
   } catch (err) {
-    console.error(err.response?.data || err.message);
+    console.error('fetch-orders error', err.response?.data || err.message || err);
     res.status(500).send('error fetching orders');
   }
 });
+
