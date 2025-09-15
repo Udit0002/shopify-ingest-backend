@@ -21,7 +21,7 @@ router.get('/recent-orders/:id', async (req, res) => {
   const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 10));
 
   try {
-    // resolve store
+    // resolve store (same as your other routes)
     let store = null;
     if (explicitStoreId) {
       store = await prisma.store.findUnique({ where: { id: explicitStoreId } });
@@ -40,7 +40,7 @@ router.get('/recent-orders/:id', async (req, res) => {
       return res.status(404).json({ error: 'store_not_found', tried: { paramId, explicitStoreId, tenantId } });
     }
 
-    // fetch orders (no orderNumber field)
+    // fetch latest orders
     const orders = await prisma.order.findMany({
       where: { storeId: store.id },
       orderBy: { createdAt: 'desc' },
@@ -50,7 +50,6 @@ router.get('/recent-orders/:id', async (req, res) => {
         shopifyId: true,
         totalPrice: true,
         currency: true,
-        status: true,
         createdAt: true,
         customerId: true,
       },
@@ -76,10 +75,9 @@ router.get('/recent-orders/:id', async (req, res) => {
       const customerName = cust ? `${cust.firstName || ''} ${cust.lastName || ''}`.trim() || '—' : '—';
       return {
         id: o.id,
-        orderId: o.shopifyId,            // use Shopify ID as identifier
+        orderId: o.shopifyId,   // Shopify order ID
         total: Number(o.totalPrice ?? 0),
-        currency: o.currency ?? 'USD',
-        status: o.status ?? 'unknown',
+        currency: o.currency,
         createdAt: o.createdAt,
         customerId: o.customerId ?? null,
         customerName,
