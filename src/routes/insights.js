@@ -13,6 +13,7 @@ router.get('/summary/:tenantId', async (req,res)=>{
   });
 });
 
+// INSIGHTS: recent orders
 router.get('/recent-orders/:id', async (req, res) => {
   const paramId = req.params.id;
   const explicitStoreId = req.query.storeId ? String(req.query.storeId) : null;
@@ -22,40 +23,31 @@ router.get('/recent-orders/:id', async (req, res) => {
   try {
     // resolve store
     let store = null;
-
     if (explicitStoreId) {
       store = await prisma.store.findUnique({ where: { id: explicitStoreId } });
     }
-
     if (!store && paramId) {
-      // try as storeId
       store = await prisma.store.findUnique({ where: { id: paramId } });
-      // if not found, try as tenantId
       if (!store) {
         store = await prisma.store.findFirst({ where: { tenantId: paramId } });
       }
     }
-
     if (!store && tenantId) {
       store = await prisma.store.findFirst({ where: { tenantId } });
     }
-
     if (!store) {
       console.log('[insights] recent-orders - store resolve failed', { paramId, explicitStoreId, tenantId });
-      return res.status(404).json({
-        error: 'store_not_found',
-        tried: { paramId, explicitStoreId, tenantId }
-      });
+      return res.status(404).json({ error: 'store_not_found', tried: { paramId, explicitStoreId, tenantId } });
     }
 
-    // fetch latest orders for this store
+    // fetch orders (no orderNumber field)
     const orders = await prisma.order.findMany({
       where: { storeId: store.id },
       orderBy: { createdAt: 'desc' },
       take: limit,
       select: {
         id: true,
-        orderNumber: true,
+        shopifyId: true,
         totalPrice: true,
         currency: true,
         status: true,
@@ -64,13 +56,13 @@ router.get('/recent-orders/:id', async (req, res) => {
       },
     });
 
-    // batch fetch related customers
+    // batch fetch customers
     const customerIds = [...new Set(orders.map(o => o.customerId).filter(Boolean))];
     let customersById = {};
     if (customerIds.length) {
       const customers = await prisma.customer.findMany({
         where: { id: { in: customerIds } },
-        select: { id: true, email: true, firstName: true, lastName: true },
+        select: { id: true, firstName: true, lastName: true, email: true },
       });
       customersById = customers.reduce((acc, c) => {
         acc[c.id] = c;
@@ -78,13 +70,13 @@ router.get('/recent-orders/:id', async (req, res) => {
       }, {});
     }
 
-    // attach customer info to orders
+    // attach customer info
     const data = orders.map(o => {
-      const cust = o.customerId ? customersById[o.customerId] : null;
+      const cust = customersById[o.customerId] || null;
       const customerName = cust ? `${cust.firstName || ''} ${cust.lastName || ''}`.trim() || '—' : '—';
       return {
         id: o.id,
-        orderNumber: o.orderNumber ?? o.id,
+        orderId: o.shopifyId,            // use Shopify ID as identifier
         total: Number(o.totalPrice ?? 0),
         currency: o.currency ?? 'USD',
         status: o.status ?? 'unknown',
@@ -101,6 +93,7 @@ router.get('/recent-orders/:id', async (req, res) => {
     res.status(500).json({ error: 'internal_server_error' });
   }
 });
+
 
 // routes/insights.js (or wherever)
 router.get('/orders-by-date/:id', async (req, res) => {
