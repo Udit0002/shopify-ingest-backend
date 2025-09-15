@@ -221,3 +221,86 @@ router.get('/fetch-orders/:shopDomain', async (req, res) => {
   }
 });
 
+// INSIGHTS: orders by date
+router.get('/insights/orders-by-date/:tenantId', async (req, res) => {
+  const { tenantId } = req.params;
+  const { from, to } = req.query; // expect YYYY-MM-DD
+
+  try {
+    // find store - adjust if tenantId maps differently
+    const store = await prisma.store.findUnique({ where: { id: tenantId }});
+    if (!store) return res.status(404).json({ error: 'store not found' });
+
+    // build where clause
+    const where = { storeId: store.id };
+    if (from || to) {
+      where.createdAt = {};
+      if (from) where.createdAt.gte = new Date(String(from) + 'T00:00:00Z');
+      if (to) where.createdAt.lte = new Date(String(to) + 'T23:59:59Z');
+    }
+
+    // fetch relevant orders (limit to safe number - you can page if needed)
+    const orders = await prisma.order.findMany({
+      where,
+      select: { id: true, createdAt: true, totalPrice: true }
+    });
+
+    // group by date (yyyy-mm-dd)
+    const map = new Map();
+    for (const o of orders) {
+      const d = new Date(o.createdAt).toISOString().slice(0, 10); // 'YYYY-MM-DD'
+      const curr = map.get(d) || { date: d, orders: 0, revenue: 0 };
+      curr.orders += 1;
+      curr.revenue += Number(o.totalPrice || 0);
+      map.set(d, curr);
+    }
+
+    // convert to sorted array
+    const arr = Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+    res.json({ data: arr });
+  } catch (err) {
+    console.error('insights orders-by-date error', err);
+    res.status(500).json({ error: 'server error' });
+  }
+});
+
+// INSIGHTS: top customers by spend
+router.get('/insights/top-customers/:tenantId', async (req, res) => {
+  const { tenantId } = req.params;
+  const limit = Number(req.query.limit) || 5;
+
+  try {
+    const store = await prisma.store.findUnique({ where: { id: tenantId }});
+    if (!store) return res.status(404).json({ error: 'store not found' });
+
+    // Use Prisma groupBy on orders to sum spend per customerId
+    // Adjust field names if your order model uses customerId or customerShopifyId
+    const groups = await prisma.order.groupBy({
+      by: ['customerId'],
+      where: { storeId: store.id, customerId: { not: null } },
+      _sum: { totalPrice: true },
+      orderBy: { _sum: { totalPrice: 'desc' } },
+      take: limit,
+    });
+
+    // join with customers table to get name/email
+    const results = [];
+    for (const g of groups) {
+      const cust = await prisma.customer.findUnique({
+        where: { id: g.customerId },
+        select: { id: true, email: true, firstName: true, lastName: true },
+      });
+      results.push({
+        id: cust?.id || g.customerId,
+        name: cust ? `${cust.firstName || ''} ${cust.lastName || ''}`.trim() || '—' : '—',
+        email: cust?.email || null,
+        totalSpend: Number(g._sum.totalPrice || 0),
+      });
+    }
+
+    res.json({ data: results });
+  } catch (err) {
+    console.error('insights top-customers error', err);
+    res.status(500).json({ error: 'server error' });
+  }
+});
