@@ -13,15 +13,42 @@ router.get('/summary/:tenantId', async (req,res)=>{
   });
 });
 
-router.get('/recent-orders/:tenantId', async (req, res) => {
-  const { tenantId } = req.params;
+router.get('/recent-orders/:id', async (req, res) => {
+  const paramId = req.params.id;
+  const explicitStoreId = req.query.storeId ? String(req.query.storeId) : null;
+  const tenantId = req.query.tenantId ? String(req.query.tenantId) : null;
   const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 10));
 
   try {
-    const store = await prisma.store.findUnique({ where: { id: tenantId } });
-    if (!store) return res.status(404).json({ error: 'store not found' });
+    // resolve store
+    let store = null;
 
-    // 1) fetch latest orders (only fields we need)
+    if (explicitStoreId) {
+      store = await prisma.store.findUnique({ where: { id: explicitStoreId } });
+    }
+
+    if (!store && paramId) {
+      // try as storeId
+      store = await prisma.store.findUnique({ where: { id: paramId } });
+      // if not found, try as tenantId
+      if (!store) {
+        store = await prisma.store.findFirst({ where: { tenantId: paramId } });
+      }
+    }
+
+    if (!store && tenantId) {
+      store = await prisma.store.findFirst({ where: { tenantId } });
+    }
+
+    if (!store) {
+      console.log('[insights] recent-orders - store resolve failed', { paramId, explicitStoreId, tenantId });
+      return res.status(404).json({
+        error: 'store_not_found',
+        tried: { paramId, explicitStoreId, tenantId }
+      });
+    }
+
+    // fetch latest orders for this store
     const orders = await prisma.order.findMany({
       where: { storeId: store.id },
       orderBy: { createdAt: 'desc' },
@@ -33,17 +60,17 @@ router.get('/recent-orders/:tenantId', async (req, res) => {
         currency: true,
         status: true,
         createdAt: true,
-        customerId: true, // important: fetch the customerId
+        customerId: true,
       },
     });
 
-    // 2) collect customerIds and batch fetch customers
+    // batch fetch related customers
     const customerIds = [...new Set(orders.map(o => o.customerId).filter(Boolean))];
     let customersById = {};
     if (customerIds.length) {
       const customers = await prisma.customer.findMany({
         where: { id: { in: customerIds } },
-        select: { id: true, firstName: true, lastName: true, email: true },
+        select: { id: true, email: true, firstName: true, lastName: true },
       });
       customersById = customers.reduce((acc, c) => {
         acc[c.id] = c;
@@ -51,10 +78,10 @@ router.get('/recent-orders/:tenantId', async (req, res) => {
       }, {});
     }
 
-    // 3) map orders => attach customerName/email if available
+    // attach customer info to orders
     const data = orders.map(o => {
-      const cust = customersById[o.customerId] || null;
-      const customerName = cust ? `${cust.firstName || ''} ${cust.lastName || ''}`.trim() || '—' : null;
+      const cust = o.customerId ? customersById[o.customerId] : null;
+      const customerName = cust ? `${cust.firstName || ''} ${cust.lastName || ''}`.trim() || '—' : '—';
       return {
         id: o.id,
         orderNumber: o.orderNumber ?? o.id,
@@ -68,9 +95,9 @@ router.get('/recent-orders/:tenantId', async (req, res) => {
       };
     });
 
-    res.json({ data });
+    res.json({ storeId: store.id, data });
   } catch (err) {
-    console.error('recent-orders error', err);
+    console.error('insights recent-orders error', err);
     res.status(500).json({ error: 'internal_server_error' });
   }
 });
