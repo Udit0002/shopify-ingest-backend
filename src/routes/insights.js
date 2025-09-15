@@ -100,15 +100,42 @@ router.get('/orders-by-date/:id', async (req, res) => {
 
 // INSIGHTS: top customers by spend
 // GET /insights/top-customers/:tenantId?limit=5
-router.get('/top-customers/:tenantId', async (req, res) => {
-  const { tenantId } = req.params;
+router.get('/top-customers/:id', async (req, res) => {
+  const paramId = req.params.id;
+  const explicitStoreId = req.query.storeId ? String(req.query.storeId) : null;
+  const tenantId = req.query.tenantId ? String(req.query.tenantId) : null;
   const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 5));
 
   try {
-    const store = await prisma.store.findUnique({ where: { id: tenantId }});
-    if (!store) return res.status(404).json({ error: 'store not found' });
+    // resolve store
+    let store = null;
 
-    // Use Prisma groupBy (safe) to sum by customerId
+    if (explicitStoreId) {
+      store = await prisma.store.findUnique({ where: { id: explicitStoreId } });
+    }
+
+    if (!store && paramId) {
+      // try as storeId
+      store = await prisma.store.findUnique({ where: { id: paramId } });
+      // if not found, try as tenantId
+      if (!store) {
+        store = await prisma.store.findFirst({ where: { tenantId: paramId } });
+      }
+    }
+
+    if (!store && tenantId) {
+      store = await prisma.store.findFirst({ where: { tenantId } });
+    }
+
+    if (!store) {
+      console.log('[insights] top-customers - store resolve failed', { paramId, explicitStoreId, tenantId });
+      return res.status(404).json({
+        error: 'store_not_found',
+        tried: { paramId, explicitStoreId, tenantId }
+      });
+    }
+
+    // group orders by customer
     const groups = await prisma.order.groupBy({
       by: ['customerId'],
       where: { storeId: store.id, customerId: { not: null } },
@@ -117,6 +144,7 @@ router.get('/top-customers/:tenantId', async (req, res) => {
       take: limit,
     });
 
+    // fetch customer info for each group
     const results = [];
     for (const g of groups) {
       const cust = await prisma.customer.findUnique({
@@ -132,11 +160,12 @@ router.get('/top-customers/:tenantId', async (req, res) => {
       });
     }
 
-    res.json({ data: results });
+    res.json({ storeId: store.id, data: results });
   } catch (err) {
     console.error('insights top-customers error', err);
     res.status(500).json({ error: 'internal_server_error' });
   }
 });
+
 
 export default router;
